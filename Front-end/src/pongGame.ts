@@ -1153,23 +1153,6 @@ export class PongGame {
     this.ctx.restore();
   }
 
-  // DISABLED: Collectible power-ups removed
-  // private drawCollectiblePowerUps(): void {
-  //   for (const collectible of this.collectiblePowerUps) {
-  //     if (collectible.collected) continue;
-  //     
-  //     this.ctx.save();
-  //     
-  //     // Simple green circle
-  //     this.ctx.fillStyle = '#00ff00';
-  //     this.ctx.beginPath();
-  //     this.ctx.arc(collectible.x, collectible.y, collectible.radius, 0, Math.PI * 2);
-  //     this.ctx.fill();
-  //     
-  //     this.ctx.restore();
-  //   }
-  // }
-
   private getPowerUpColor(type: PowerUpType): string {
     switch (type) {
       case 'paddle_size_boost': return 'rgba(0, 255, 0, 1)'; // Green
@@ -1236,46 +1219,7 @@ export class PongGame {
     this.powerUps = this.powerUps.filter(p => p.active);
   }
 
-  // DISABLED: Collectible power-ups removed
-  // private updateCollectiblePowerUps(): void {
-  //   const now = Date.now();
-  //   
-  //   // Spawn new collectible power-ups
-  //   if (this.config.powerUpsEnabled && 
-  //       now - this.lastCollectibleSpawnAtMs > this.collectibleSpawnInterval &&
-  //       this.collectiblePowerUps.length < 8) {
-  //     this.spawnCollectiblePowerUp();
-  //     this.lastCollectibleSpawnAtMs = now;
-  //   }
-  //   
-  //   // Update existing collectibles
-  //   for (let i = this.collectiblePowerUps.length - 1; i >= 0; i--) {
-  //     const collectible = this.collectiblePowerUps[i];
-  //     
-  //     // Update glow animation
-  //     collectible.glowPhase += 0.1;
-  //     
-  //     // Check if expired
-  //     if (now - collectible.spawnTime > this.collectibleLifetime) {
-  //       this.collectiblePowerUps.splice(i, 1);
-  //       continue;
-  //     }
-  //     
-  //     // Check collision with paddles
-  //     this.checkCollectibleCollision(collectible);
-  //   }
-  // }
-
-  // DISABLED: Collectible power-ups removed
-  // private spawnCollectiblePowerUp(): void {
-  //   if (!this.config.powerUpsEnabled) return;
-  //   
-  //   // Choose random power-up type from enabled types or use defaults
-  //   const availableTypes = (this.config.powerUpTypes as PowerUpType[]) || [
-  //     'paddle_size_boost', 'paddle_speed_boost', 'ball_speed_slow', 'ball_speed_fast',
-  //     'shrink_opponent', 'reverse_controls', 'shield', 'magnet', 'multi_ball', 'curve_ball'
-  //   ];
-  //   
+  
   //   if (availableTypes.length === 0) return;
   //   
   //   const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
@@ -1755,7 +1699,6 @@ export class PongGame {
     this.ctx.font = '16px Arial';
     this.ctx.textAlign = 'center';
     this.ctx.fillText(`${this.player1.name}: A key | ${this.player2.name}: T key`, centerX, centerY - 10);
-    this.ctx.fillText('Press SPACE to start', centerX, centerY + 20);
     
     this.ctx.restore();
   }

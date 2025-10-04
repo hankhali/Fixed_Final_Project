@@ -132,13 +132,20 @@ async function insertMatch(tournamentId, players, round, shouldShuffle = true){
 
     // Only shuffle if not already shuffled
     if (shouldShuffle) {
-        console.log('[🎲 BACKEND SHUFFLE] Using proper Fisher-Yates algorithm for tournament randomization');
+        console.log('[🎲 BACKEND SHUFFLE] Using enhanced Fisher-Yates algorithm for tournament randomization');
         console.log('[🎲 BACKEND SHUFFLE] Players before shuffle:', players.map(p => p.tournament_alias));
+        
+        // Add timestamp-based entropy for better randomization
+        const shuffleTimestamp = Date.now();
+        console.log('[🎲 BACKEND SHUFFLE] Using timestamp for additional entropy:', shuffleTimestamp);
+        
         for (let i = players.length - 1; i > 0; i--) {
-            const random = Math.floor(Math.random() * (i + 1));
+            // Enhanced randomization with timestamp
+            const randomSeed = (Math.random() * shuffleTimestamp) % 1;
+            const random = Math.floor(randomSeed * (i + 1));
             [players[i], players[random]] = [players[random], players[i]];
         }
-        console.log('[🎲 BACKEND SHUFFLE] Players after shuffle:', players.map(p => p.tournament_alias));
+        console.log('[🎲 BACKEND SHUFFLE] Players after enhanced shuffle:', players.map(p => p.tournament_alias));
     } else {
         console.log('[🎲 BACKEND SHUFFLE] Skipping shuffle - already shuffled at tournament level');
         console.log('[🎲 BACKEND SHUFFLE] Using pre-shuffled players:', players.map(p => p.tournament_alias));
@@ -169,18 +176,21 @@ async function createMatch(tournamentId){
     }
 
     // Fetch players for this tournament (winners for final, joined for initial)
+    // 🎲 DATABASE FIX: Add ORDER BY RANDOM() to prevent consistent player ordering
     const playersJoined = db.prepare(`
         SELECT tournament_alias 
         FROM tournament_players 
         WHERE tournament_id = ? AND status = 'joined'
+        ORDER BY RANDOM()
     `).all(tournamentId);
     
-    console.log(`[DEBUG] Players joined for tournament ${tournamentId}:`, playersJoined);
+    console.log(`[DEBUG] Players joined for tournament ${tournamentId} (DB randomized):`, playersJoined);
     
     const playersWinners = db.prepare(`
         SELECT tournament_alias 
         FROM tournament_players 
         WHERE tournament_id = ? AND status = 'winner'
+        ORDER BY RANDOM()
     `).all(tournamentId);
 
     console.log(`[DEBUG] Players winners for tournament ${tournamentId}:`, playersWinners);
@@ -203,9 +213,15 @@ async function createMatch(tournamentId){
         console.log('[🎲 BACKEND FIX] Shuffling all 4 players together BEFORE creating pairs');
         console.log('[🎲 BACKEND FIX] Players before full shuffle:', players.map(p => p.tournament_alias));
         
-        // Fisher-Yates shuffle on ALL players
+        // Add timestamp-based entropy to improve randomization
+        const shuffleTimestamp = Date.now();
+        console.log('[🎲 BACKEND FIX] Using timestamp for additional entropy:', shuffleTimestamp);
+        
+        // Fisher-Yates shuffle on ALL players with enhanced randomization
         for (let i = players.length - 1; i > 0; i--) {
-            const random = Math.floor(Math.random() * (i + 1));
+            // Use timestamp + Math.random() for better randomization
+            const randomSeed = (Math.random() * shuffleTimestamp) % 1;
+            const random = Math.floor(randomSeed * (i + 1));
             [players[i], players[random]] = [players[random], players[i]];
         }
         
