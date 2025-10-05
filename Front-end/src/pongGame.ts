@@ -8,11 +8,21 @@ export interface GameConfig {
   paddleSpeed: number;
   ballSpeed: number;
   maxScore: number;
-  // Customization
+  // Visual Customization
   theme?: 'neon' | 'retro' | 'dark' | 'space' | 'classic';
+  ballTrail?: boolean;
+  particleEffects?: boolean;
+  screenShake?: boolean;
+  // Audio Settings
+  soundEffects?: boolean;
+  volume?: number;
+  // Gameplay Customization
   powerUpsEnabled?: boolean;
   attacksEnabled?: boolean; // reserved for future use
-  powerUpTypes?: Array<'paddle_size' | 'ball_speed' | 'slow_opponent' | 'shrink_opponent' | 'curve_ball' | 'multi_ball' | 'reverse_controls' | 'shield' | 'magnet'>;
+  powerUpTypes?: Array<'paddle_size' | 'paddle_speed' | 'multi_ball' | 'freeze_opponent' | 'invisible_ball'>;
+  powerUpFrequency?: 'low' | 'medium' | 'high';
+  // Map Features
+  mapVariant?: 'classic' | 'obstacles' | 'moving_walls';
   // Player-specific power-ups
   player1PowerUps?: { [key: string]: number }; // power-up type -> remaining uses
   player2PowerUps?: { [key: string]: number }; // power-up type -> remaining uses
@@ -26,10 +36,7 @@ export interface Player {
   isAI?: boolean;
   temporaryPaddleBoostUntilMs?: number;
   temporaryPaddleSlowUntilMs?: number;
-  temporaryPaddleShrinkUntilMs?: number;
-  temporaryReverseControlsUntilMs?: number;
-  temporaryShieldUntilMs?: number;
-  temporaryMagnetUntilMs?: number;
+  temporaryPaddleSpeedBoostUntilMs?: number;
 }
 
 export interface Ball {
@@ -40,6 +47,7 @@ export interface Ball {
   speed: number;
   radius: number;
   lastHitBy?: string;
+  temporaryInvisibleUntilMs?: number;
 }
 
 export interface PowerUpCollectible {
@@ -55,9 +63,8 @@ export interface PowerUpCollectible {
 }
 
 export type PowerUpType = 
-  | 'paddle_size_boost' | 'paddle_speed_boost' | 'ball_speed_slow' | 'ball_speed_fast'
-  | 'shrink_opponent' | 'curve_ball' | 'multi_ball' | 'reverse_controls' 
-  | 'shield' | 'magnet' | 'freeze_opponent' | 'invisible_ball';
+  | 'paddle_size_boost' | 'paddle_speed_boost'| 'multi_ball'
+  | 'freeze_opponent' | 'invisible_ball';
 
 export interface GameState {
   isPlaying: boolean;
@@ -72,7 +79,7 @@ interface PowerUp {
   x: number;
   y: number;
   radius: number;
-  type: 'paddle_size' | 'ball_speed' | 'slow_opponent' | 'shrink_opponent' | 'curve_ball' | 'multi_ball' | 'reverse_controls' | 'shield' | 'magnet';
+  type: 'paddle_size' | 'paddle_speed' | 'multi_ball' | 'freeze_opponent' | 'invisible_ball';
   active: boolean;
   collector?: 'player1' | 'player2';
 }
@@ -124,11 +131,25 @@ export class PongGame {
   private animationId: number | null = null;
   private onGameEnd?: (winner: Player, gameTime: number) => void;
   private onScoreUpdate?: (player1Score: number, player2Score: number) => void;
-  private powerUps: PowerUp[] = [];
-  private lastPowerUpSpawnAtMs = 0;
   private nextHitCurveFor: 'player1' | 'player2' | null = null;
   private extraBalls: Ball[] = [];
   private collectedPowerUps: PowerUp[] = [];
+  
+  // Floating Powerup Orbs
+  private floatingPowerUps: PowerUp[] = [];
+  private lastPowerUpSpawnAtMs = 0;
+  private powerUpSpawnInterval = 15000; // 15 seconds between spawns
+  
+  // Visual Effects
+  private ballTrail: { x: number; y: number; time: number; alpha: number }[] = [];
+  private particles: { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: string; size: number }[] = [];
+  private screenShakeOffset: { x: number; y: number } = { x: 0, y: 0 };
+  private screenShakeIntensity: number = 0;
+  private screenShakeDecay: number = 0.95;
+  
+  // Map Variants
+  private obstacles: { x: number; y: number; width: number; height: number; type: 'static' | 'moving' }[] = [];
+  private movingWalls: { x: number; y: number; width: number; height: number; direction: 'up' | 'down'; speed: number }[] = [];
   
   // Collectible Power-ups System - DISABLED
   // private collectiblePowerUps: PowerUpCollectible[] = [];
@@ -173,9 +194,11 @@ export class PongGame {
       ballSpeed: 4,
       maxScore: 5,
       theme: 'neon',
+      soundEffects: true,
+      volume: 70,
       powerUpsEnabled: true,
       attacksEnabled: false,
-      powerUpTypes: ['paddle_size', 'ball_speed'],
+      powerUpTypes: ['paddle_size', 'paddle_speed', 'multi_ball', 'freeze_opponent', 'invisible_ball'],
       ...config
     };
     
@@ -231,12 +254,12 @@ export class PongGame {
 
     // Initialize AI personality based on difficulty
     this.initializeAIPersonality();
-    // this.aiCurrentStrategy = { // This line was commented out in the original file
-    //   mode: 'balanced',
-    //   targetY: this.config.canvasHeight / 2,
-    //   confidence: 0.5,
-    //   shouldCollectPowerUp: false
-    // };
+    
+    // Initialize audio system
+    this.initAudio();
+    
+    // Initialize map variant
+    this.initializeMapVariant(this.config.mapVariant || 'classic');
   }
 
   // Public Methods
@@ -275,17 +298,13 @@ export class PongGame {
     this.player2.temporaryPaddleBoostUntilMs = undefined;
     this.player1.temporaryPaddleSlowUntilMs = undefined;
     this.player2.temporaryPaddleSlowUntilMs = undefined;
-    this.player1.temporaryPaddleShrinkUntilMs = undefined;
-    this.player2.temporaryPaddleShrinkUntilMs = undefined;
-    this.player1.temporaryReverseControlsUntilMs = undefined;
-    this.player2.temporaryReverseControlsUntilMs = undefined;
-    this.player1.temporaryShieldUntilMs = undefined;
-    this.player2.temporaryShieldUntilMs = undefined;
-    this.player1.temporaryMagnetUntilMs = undefined;
-    this.player2.temporaryMagnetUntilMs = undefined;
-    this.powerUps = [];
+    this.player1.temporaryPaddleSpeedBoostUntilMs = undefined;
+    this.player2.temporaryPaddleSpeedBoostUntilMs = undefined;
+    this.ball.temporaryInvisibleUntilMs = undefined;
+    // Clear powerup systems
+    this.collectedPowerUps = [];
+    this.floatingPowerUps = [];
     this.lastPowerUpSpawnAtMs = 0;
-    this.nextHitCurveFor = null;
     this.extraBalls = [];
     this.resetBall();
     this.resetPaddles();
@@ -319,12 +338,71 @@ export class PongGame {
 
   public updateConfig(newConfig: Partial<GameConfig>): void {
     console.log('🔧 Updating game config:', newConfig);
+    
+    // Store previous config for comparison
+    const previousConfig = { ...this.config };
+    
+    // Update config
     Object.assign(this.config, newConfig);
     
     // Apply visual changes immediately
-    if (newConfig.theme) {
-      console.log('🎨 Theme changed to:', newConfig.theme);
+    if (newConfig.theme && newConfig.theme !== previousConfig.theme) {
+      console.log('🎨 Theme changed from', previousConfig.theme, 'to:', newConfig.theme);
       // The theme will be applied in the next render cycle automatically
+    }
+    
+    // Handle power-up changes
+    if (newConfig.powerUpsEnabled !== undefined) {
+      if (!newConfig.powerUpsEnabled) {
+        // Clear existing power-ups when disabled
+        this.collectedPowerUps = [];
+        this.floatingPowerUps = [];
+        console.log('🔌 Power-ups disabled, clearing existing power-ups');
+      } else {
+        console.log('⚡ Power-ups enabled');
+      }
+    }
+    
+    // Handle power-up frequency changes
+    if (newConfig.powerUpFrequency && this.config.powerUpsEnabled) {
+      const frequencyMultipliers = { low: 2.0, medium: 1.0, high: 0.5 };
+      const multiplier = frequencyMultipliers[newConfig.powerUpFrequency] || 1.0;
+      // This would affect spawn timing in a full implementation
+      console.log('🎯 Power-up frequency set to:', newConfig.powerUpFrequency, 'multiplier:', multiplier);
+    }
+    
+    // Handle paddle size changes
+    if (newConfig.paddleHeight) {
+      this.config.paddleHeight = newConfig.paddleHeight;
+      console.log('🏓 Paddle height updated to:', newConfig.paddleHeight);
+    }
+    
+    // Handle audio settings
+    if (newConfig.soundEffects !== undefined) {
+      console.log('🔊 Sound effects:', newConfig.soundEffects ? 'enabled' : 'disabled');
+    }
+    
+    if (newConfig.volume !== undefined) {
+      console.log('🔉 Volume set to:', newConfig.volume + '%');
+    }
+    
+    // Handle visual effects
+    if (newConfig.ballTrail !== undefined) {
+      console.log('🌟 Ball trail:', newConfig.ballTrail ? 'enabled' : 'disabled');
+    }
+    
+    if (newConfig.particleEffects !== undefined) {
+      console.log('✨ Particle effects:', newConfig.particleEffects ? 'enabled' : 'disabled');
+    }
+    
+    if (newConfig.screenShake !== undefined) {
+      console.log('📳 Screen shake:', newConfig.screenShake ? 'enabled' : 'disabled');
+    }
+    
+    // Handle map variant changes
+    if (newConfig.mapVariant && newConfig.mapVariant !== previousConfig.mapVariant) {
+      console.log('🗺️ Map variant changed to:', newConfig.mapVariant);
+      this.initializeMapVariant(newConfig.mapVariant);
     }
     
     console.log('✅ Game config updated:', this.config);
@@ -347,15 +425,30 @@ export class PongGame {
     document.addEventListener('keydown', (e) => {
       const key = e.key.toLowerCase();
       this.keys[key] = true;
+      
+      // Initialize audio context on first user interaction
+      if (this.audioContext && this.audioContext.state === 'suspended') {
+        this.audioContext.resume().then(() => {
+          console.log('🔊 Audio context resumed on user interaction');
+        }).catch(error => {
+          console.warn('❌ Failed to resume audio context:', error);
+        });
+      }
+      
       // Prevent default for game control keys
       if (["arrowup", "arrowdown", "w", "s", " "].includes(key)) {
         e.preventDefault();
       }
       // Game controls
       if (key === ' ') {
-        if (this.gameState.isPaused) {
+        if (!this.gameState.isPlaying && !this.gameState.isGameOver) {
+          // Start the game
+          this.startGame();
+        } else if (this.gameState.isPaused) {
+          // Resume the game
           this.resumeGame();
-        } else {
+        } else if (this.gameState.isPlaying) {
+          // Pause the game
           this.pauseGame();
         }
       }
@@ -378,29 +471,11 @@ export class PongGame {
       if (key === 'r') {
         this.resetGame();
       }
-      // if (key === 'p') {
-      //   // Manual spawn collectible for testing
-      //   this.spawnCollectiblePowerUp();
-      //   console.log('🧪 Manual collectible spawn triggered!');
-      // }
-      if (key === 'x') {
-        // TEST: Add power-up directly to Player 1 inventory
-        this.addPowerUpToInventory('paddle_size_boost', 'player1');
-        console.log('🧪 TEST: Added paddle boost to Player 1 inventory!');
-      }
-      if (key === 'z') {
-        // TEST: Add power-up directly to Player 2 inventory
-        this.addPowerUpToInventory('ball_speed_fast', 'player2');
-        console.log('🧪 TEST: Added ball speed boost to Player 2 inventory!');
-      }
     });
 
     document.addEventListener('keyup', (e) => {
       this.keys[e.key.toLowerCase()] = false;
     });
-
-    // Mouse/Touch controls for mobile
-  // Removed mouse and touch controls for player 2. Only arrow keys control player 2 now.
   }
 
   private gameLoop(): void {
@@ -430,14 +505,23 @@ export class PongGame {
     this.updatePaddles();
     this.updateBall();
     
-    // Update power-ups
-    this.updatePowerUps();
-    
-    // Update collectible power-ups system - DISABLED
-    // this.updateCollectiblePowerUps();
+    // Update floating powerup orbs
+    if (this.config.powerUpsEnabled) {
+      this.updateFloatingPowerUps();
+      this.spawnFloatingPowerUps();
+    }
     
     // Update extra balls
     this.updateExtraBalls();
+
+    // Update visual effects
+    this.updateVisualEffects();
+
+    // Update map variants
+    this.updateMapVariants();
+
+    // Check map collisions
+    this.checkMapCollisions();
 
     // Check for scoring
     this.checkScoring();
@@ -458,6 +542,9 @@ export class PongGame {
     if (player.temporaryPaddleSlowUntilMs && now < player.temporaryPaddleSlowUntilMs) {
       base *= 0.6;
     }
+    if (player.temporaryPaddleSpeedBoostUntilMs && now < player.temporaryPaddleSpeedBoostUntilMs) {
+      base *= 1.5;
+    }
     return base;
   }
 
@@ -466,32 +553,30 @@ export class PongGame {
     const p2Speed = this.getEffectivePaddleSpeed(this.player2);
   
     // Player 1 controls (W/S)
-    const p1Reverse = this.player1.temporaryReverseControlsUntilMs && Date.now() < this.player1.temporaryReverseControlsUntilMs;
     if (this.keys['w']) {
-      this.player1.y -= p1Reverse ? -p1Speed : p1Speed;
+      this.player1.y -= p1Speed;
     }
     if (this.keys['s']) {
-      this.player1.y += p1Reverse ? -p1Speed : p1Speed;
+      this.player1.y += p1Speed;
     }
   
     // Player 2 controls (Arrow Up/Down)
     if (!this.player2.isAI) {
       console.log('Player2 is NOT AI, using manual controls');
-      const p2Reverse = this.player2.temporaryReverseControlsUntilMs && Date.now() < this.player2.temporaryReverseControlsUntilMs;
       if (this.keys['arrowup']) {
-        this.player2.y -= p2Reverse ? -p2Speed : p2Speed;
+        this.player2.y -= p2Speed;
       }
       if (this.keys['arrowdown']) {
-        this.player2.y += p2Reverse ? -p2Speed : p2Speed;
+        this.player2.y += p2Speed;
       }
     } else {
       console.log('Player2 IS AI, calling updateAI...');
       this.updateAI(p2Speed);
       
-      // Handle AI power-ups
-      if (this.config.powerUpsEnabled) {
-        this.handleAIPowerUps();
-      }
+      // Handle AI power-ups (inventory system only)
+      // if (this.config.powerUpsEnabled) {
+      //   this.handleAIPowerUps(); // Old floating powerup system - disabled
+      // }
     }
   
     // Clamp paddles to canvas bounds
@@ -521,14 +606,6 @@ export class PongGame {
       console.log('AI staying still (in dead zone)');
     }
   }
-
-  // private updateAIGameState(): void {
-  //   // Unused function - commented out to fix TypeScript error
-  // }
-
-  // private analyzeGameSituation(): void {
-  //   // Unused function
-  // }
 
   // @ts-ignore
   private predictBallTrajectory(ball: Ball): BallPrediction {
@@ -604,68 +681,44 @@ export class PongGame {
       }
     }
     
-    // Check for power-up opportunities
-    // let _shouldCollectPowerUp = false; // Unused
-    // let _targetPowerUp: PowerUp | undefined; // Unused
-    
-    if (this.config.powerUpsEnabled && this.powerUps.length > 0) {
-      const nearbyPowerUp = this.findNearestPowerUp();
-      if (nearbyPowerUp && Math.random() < this.aiPersonality.powerUpPriority) {
-        const distanceToPlayer = Math.abs(nearbyPowerUp.x - (this.config.canvasWidth - this.config.paddleWidth));
-        const distanceToBall = Math.abs(this.ball.x - (this.config.canvasWidth - this.config.paddleWidth));
+    // Old floating powerup system - disabled (using inventory system instead)
+    // if (this.config.powerUpsEnabled && this.powerUps.length > 0) {
+    //   const nearbyPowerUp = this.findNearestPowerUp();
+    //   if (nearbyPowerUp && Math.random() < this.aiPersonality.powerUpPriority) {
+    //     const distanceToPlayer = Math.abs(nearbyPowerUp.x - (this.config.canvasWidth - this.config.paddleWidth));
+    //     const distanceToBall = Math.abs(this.ball.x - (this.config.canvasWidth - this.config.paddleWidth));
         
-        // Only go for power-up if it's closer than the ball or ball is far away
-        if (distanceToPlayer < distanceToBall * 0.7) {
-          _shouldCollectPowerUp = true;
-          _targetPowerUp = nearbyPowerUp;
-          targetY = nearbyPowerUp.y;
-        }
-      }
-    }
-    
-    // this.aiCurrentStrategy = { // This line was commented out in the original file
-    //   mode,
-    //   targetY: Math.max(0, Math.min(targetY, this.config.canvasHeight)),
-    //   confidence: prediction.willHitPaddle ? 0.8 : 0.4,
-    //   shouldCollectPowerUp,
-    //   targetPowerUp
-    // };
+    //     // Only go for power-up if it's closer than the ball or ball is far away
+    //     if (distanceToPlayer < distanceToBall * 0.7) {
+    //       targetY = nearbyPowerUp.y;
+    //     }
+    //   }
+    // }
   }
 
-  private findNearestPowerUp(): PowerUp | undefined {
-    if (!this.powerUps.length) return undefined;
+  // OLD FLOATING POWERUP SYSTEM - DISABLED (using inventory system instead)
+  // private findNearestPowerUp(): PowerUp | undefined {
+  //   if (!this.powerUps.length) return undefined;
     
-    const aiX = this.config.canvasWidth - this.config.paddleWidth;
-    let nearest: PowerUp | undefined;
-    let minDistance = Infinity;
+  //   const aiX = this.config.canvasWidth - this.config.paddleWidth;
+  //   let nearest: PowerUp | undefined;
+  //   let minDistance = Infinity;
     
-    for (const powerUp of this.powerUps) {
-      if (!powerUp.active) continue;
+  //   for (const powerUp of this.powerUps) {
+  //     if (!powerUp.active) continue;
       
-      const distance = Math.sqrt(
-        Math.pow(powerUp.x - aiX, 2) + 
-        Math.pow(powerUp.y - (this.player2.y + this.getPaddleHeight(this.player2) / 2), 2)
-      );
+  //     const distance = Math.sqrt(
+  //       Math.pow(powerUp.x - aiX, 2) + 
+  //       Math.pow(powerUp.y - (this.player2.y + this.getPaddleHeight(this.player2) / 2), 2)
+  //     );
       
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearest = powerUp;
-      }
-    }
+  //     if (distance < minDistance) {
+  //       minDistance = distance;
+  //       nearest = powerUp;
+  //     }
+  //   }
     
-    return nearest;
-  }
-
-  // private planAIActions(prediction: BallPrediction): void {
-  //   // Unused function - commented out to fix TypeScript error
-  // }
-
-  // private processAIReactionQueue(now: number): void {
-  //   // Unused function
-  // }
-
-  // private executeAIKeyboardInput(aiSpeed: number): void {
-  //   // Unused function
+  //   return nearest;
   // }
 
   private clampPaddle(player: Player): void {
@@ -674,26 +727,6 @@ export class PongGame {
   }
 
   private updateBall(): void {
-    // Check for magnet effect
-    const p1Magnet = this.player1.temporaryMagnetUntilMs && Date.now() < this.player1.temporaryMagnetUntilMs;
-    const p2Magnet = this.player2.temporaryMagnetUntilMs && Date.now() < this.player2.temporaryMagnetUntilMs;
-    
-    if (p1Magnet) {
-      // Attract ball towards player 1 paddle
-      const p1CenterY = this.player1.y + this.getPaddleHeight(this.player1) / 2;
-      const magnetForce = 0.3;
-      const dy = p1CenterY - this.ball.y;
-      this.ball.velocityY += dy * magnetForce * 0.01;
-    }
-    
-    if (p2Magnet) {
-      // Attract ball towards player 2 paddle
-      const p2CenterY = this.player2.y + this.getPaddleHeight(this.player2) / 2;
-      const magnetForce = 0.3;
-      const dy = p2CenterY - this.ball.y;
-      this.ball.velocityY += dy * magnetForce * 0.01;
-    }
-
     this.ball.x += this.ball.velocityX;
     this.ball.y += this.ball.velocityY;
 
@@ -701,6 +734,10 @@ export class PongGame {
     if (this.ball.y <= this.config.ballSize / 2 || this.ball.y >= this.config.canvasHeight - this.config.ballSize / 2) {
       this.ball.velocityY = -this.ball.velocityY;
       this.ball.y = Math.max(this.config.ballSize / 2, Math.min(this.ball.y, this.config.canvasHeight - this.config.ballSize / 2));
+
+      // Visual effects
+      this.addScreenShake(2);
+      this.createParticles(this.ball.x, this.ball.y, 6, '#ffffff', 2);
     }
 
     // Ball collision with paddles
@@ -721,18 +758,15 @@ export class PongGame {
 
     if (ballLeft <= p1Right && ballRight >= p1X && ballBottom >= p1Y && ballTop <= p1Y + p1Height) {
       if (this.ball.velocityX < 0) { // Only bounce if moving toward paddle
-        // Check for shield protection
-        const p1Shield = this.player1.temporaryShieldUntilMs && Date.now() < this.player1.temporaryShieldUntilMs;
-        if (p1Shield) {
-          // Shield deflects ball with extra power
-          this.ball.velocityX = -this.ball.velocityX * 1.2;
-          this.ball.velocityY *= 1.1;
-        } else {
-          this.ball.velocityX = -this.ball.velocityX;
-        }
+        this.ball.velocityX = -this.ball.velocityX;
         this.ball.x = p1Right + this.config.ballSize / 2; // Prevent sticking
         this.addSpin('player1');
         this.ball.lastHitBy = 'player1';
+        this.playSound('paddle-hit');
+        
+        // Visual effects
+        this.addScreenShake(3);
+        this.createParticles(this.ball.x, this.ball.y, 8, '#00fff7', 3);
       }
     }
 
@@ -744,18 +778,15 @@ export class PongGame {
 
     if (ballLeft <= p2Right && ballRight >= p2X && ballBottom >= p2Y && ballTop <= p2Y + p2Height) {
       if (this.ball.velocityX > 0) { // Only bounce if moving toward paddle
-        // Check for shield protection
-        const p2Shield = this.player2.temporaryShieldUntilMs && Date.now() < this.player2.temporaryShieldUntilMs;
-        if (p2Shield) {
-          // Shield deflects ball with extra power
-          this.ball.velocityX = -this.ball.velocityX * 1.2;
-          this.ball.velocityY *= 1.1;
-        } else {
-          this.ball.velocityX = -this.ball.velocityX;
-        }
+        this.ball.velocityX = -this.ball.velocityX;
         this.ball.x = p2X - this.config.ballSize / 2; // Prevent sticking
         this.addSpin('player2');
         this.ball.lastHitBy = 'player2';
+        this.playSound('paddle-hit');
+        
+        // Visual effects
+        this.addScreenShake(3);
+        this.createParticles(this.ball.x, this.ball.y, 8, '#ff00ea', 3);
       }
     }
   }
@@ -780,11 +811,21 @@ export class PongGame {
       // Player 2 scores
       this.player2.score++;
       this.onScoreUpdate?.(this.player1.score, this.player2.score);
+      
+      // Visual effects for scoring
+      this.addScreenShake(8);
+      this.createParticles(this.config.canvasWidth / 4, this.config.canvasHeight / 2, 15, '#ff00ea', 4);
+      
       this.resetBall(1); // Ball goes toward player 1
     } else if (this.ball.x > this.config.canvasWidth) {
       // Player 1 scores
       this.player1.score++;
       this.onScoreUpdate?.(this.player1.score, this.player2.score);
+      
+      // Visual effects for scoring
+      this.addScreenShake(8);
+      this.createParticles((this.config.canvasWidth * 3) / 4, this.config.canvasHeight / 2, 15, '#00fff7', 4);
+      
       this.resetBall(-1); // Ball goes toward player 2
     }
   }
@@ -826,6 +867,10 @@ export class PongGame {
   }
 
   private render(): void {
+    // Apply screen shake
+    this.ctx.save();
+    this.ctx.translate(this.screenShakeOffset.x, this.screenShakeOffset.y);
+    
     // Clear canvas
     this.ctx.fillStyle = '#080820';
     this.ctx.fillRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
@@ -840,27 +885,39 @@ export class PongGame {
     this.drawPaddle(this.config.paddleWidth, this.player1.y, this.player1);
     this.drawPaddle(this.config.canvasWidth - this.config.paddleWidth * 2, this.player2.y, this.player2);
 
+    // Draw ball trail
+    this.drawBallTrail();
+
     // Draw ball
     this.drawBall();
 
     // Draw extra balls
     this.drawExtraBalls();
 
-    // Draw power-ups - DISABLED
-    // if (this.config.powerUpsEnabled) {
-    //   this.drawPowerUps();
-    //   this.drawCollectiblePowerUps();
-    // }
+    // Draw particles
+    this.drawParticles();
+
+    // Draw map variants
+    this.drawMapVariants();
+
+    // Draw floating powerup orbs
+    if (this.config.powerUpsEnabled) {
+      this.drawFloatingPowerUps();
+    }
 
     // Draw scores
     this.drawScores();
 
-    // Power-up inventory display removed per user request
-
-    // Power-up instructions removed
+    // Draw power-up inventory
+    if (this.config.powerUpsEnabled) {
+      this.drawPowerUpInventory();
+    }
 
     // Draw game state messages
     this.drawGameStateMessages();
+    
+    // Restore context (undo screen shake)
+    this.ctx.restore();
   }
 
   private drawBackground(): void {
@@ -1054,23 +1111,6 @@ export class PongGame {
     this.ctx.strokeRect(x - 1, y - 1, this.config.paddleWidth + 2, paddleHeight + 2);
   }
   
-  if (player.temporaryShieldUntilMs && now < player.temporaryShieldUntilMs) {
-    // Shield - cyan glow
-    this.ctx.shadowColor = '#00ffff';
-    this.ctx.shadowBlur = 25;
-    this.ctx.strokeStyle = '#00ffff';
-    this.ctx.lineWidth = 4;
-    this.ctx.strokeRect(x - 3, y - 3, this.config.paddleWidth + 6, paddleHeight + 6);
-  }
-  
-  if (player.temporaryMagnetUntilMs && now < player.temporaryMagnetUntilMs) {
-    // Magnet - yellow glow
-    this.ctx.shadowColor = '#ffff00';
-    this.ctx.shadowBlur = 20;
-    this.ctx.strokeStyle = '#ffff00';
-    this.ctx.lineWidth = 3;
-    this.ctx.strokeRect(x - 2, y - 2, this.config.paddleWidth + 4, paddleHeight + 4);
-  }
   
   this.ctx.restore();
   }
@@ -1082,13 +1122,27 @@ export class PongGame {
     if (player.temporaryPaddleBoostUntilMs && now < player.temporaryPaddleBoostUntilMs) {
       height *= 1.5;
     }
-    if (player.temporaryPaddleShrinkUntilMs && now < player.temporaryPaddleShrinkUntilMs) {
-      height *= 0.7;
-    }
     return height;
   }
 
   private drawBall(): void {
+    // Check if ball is invisible
+    const now = Date.now();
+    const isInvisible = this.ball.temporaryInvisibleUntilMs && now < this.ball.temporaryInvisibleUntilMs;
+    
+    if (isInvisible) {
+      // Draw a subtle outline when invisible
+      this.ctx.save();
+      this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      this.ctx.lineWidth = 2;
+      this.ctx.setLineDash([5, 5]);
+      this.ctx.beginPath();
+      this.ctx.arc(this.ball.x, this.ball.y, this.config.ballSize, 0, Math.PI * 2);
+      this.ctx.stroke();
+      this.ctx.restore();
+      return;
+    }
+    
     // Premium ball: animated neon glow and gradient
     this.ctx.save();
     this.ctx.shadowColor = '#ff00ea';
@@ -1127,219 +1181,406 @@ export class PongGame {
     }
   }
 
-  private drawPowerUps(): void {
+  private drawBallTrail(): void {
+    if (!this.config.ballTrail || this.ballTrail.length === 0) return;
+    
     this.ctx.save();
-    for (const pu of this.powerUps) {
-      if (!pu.active) continue;
-      const colors = {
-        'paddle_size': '#00ff88',
-        'ball_speed': '#ffaa00',
-        'slow_opponent': '#ff4444',
-        'shrink_opponent': '#ff66ff',
-        'curve_ball': '#66aaff',
-        'multi_ball': '#ff8800',
-        'reverse_controls': '#ff0080',
-        'shield': '#00ffff',
-        'magnet': '#ffff00'
-      };
-      const color = colors[pu.type] || '#ffffff';
-      this.ctx.shadowColor = color;
-      this.ctx.shadowBlur = 20;
-      this.ctx.fillStyle = color.replace('#', 'rgba(') + 'ee)';
+    for (let i = 0; i < this.ballTrail.length; i++) {
+      const point = this.ballTrail[i];
+      const size = this.config.ballSize * 0.3 * point.alpha;
+      
+      this.ctx.globalAlpha = point.alpha * 0.6;
+      this.ctx.fillStyle = '#00fff7';
       this.ctx.beginPath();
-      this.ctx.arc(pu.x, pu.y, pu.radius, 0, Math.PI * 2);
+      this.ctx.arc(point.x, point.y, size, 0, Math.PI * 2);
       this.ctx.fill();
     }
     this.ctx.restore();
   }
 
-  private getPowerUpColor(type: PowerUpType): string {
-    switch (type) {
-      case 'paddle_size_boost': return 'rgba(0, 255, 0, 1)'; // Green
-      case 'paddle_speed_boost': return 'rgba(255, 255, 0, 1)'; // Yellow
-      case 'ball_speed_slow': return 'rgba(0, 100, 255, 1)'; // Blue
-      case 'ball_speed_fast': return 'rgba(255, 100, 0, 1)'; // Orange
-      case 'shrink_opponent': return 'rgba(255, 0, 255, 1)'; // Magenta
-      case 'reverse_controls': return 'rgba(128, 0, 128, 1)'; // Purple
-      case 'shield': return 'rgba(0, 255, 255, 1)'; // Cyan
-      case 'magnet': return 'rgba(255, 192, 203, 1)'; // Pink
-      case 'multi_ball': return 'rgba(255, 255, 255, 1)'; // White
-      case 'curve_ball': return 'rgba(255, 165, 0, 1)'; // Gold
-      case 'freeze_opponent': return 'rgba(173, 216, 230, 1)'; // Light Blue
-      case 'invisible_ball': return 'rgba(128, 128, 128, 1)'; // Gray
-      default: return 'rgba(255, 0, 0, 1)'; // Red
+  private drawParticles(): void {
+    if (!this.config.particleEffects || this.particles.length === 0) return;
+    
+    this.ctx.save();
+    for (const particle of this.particles) {
+      this.ctx.globalAlpha = particle.life;
+      this.ctx.fillStyle = particle.color;
+      this.ctx.beginPath();
+      this.ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+    this.ctx.restore();
+  }
+
+  private drawMapVariants(): void {
+    // Draw obstacles
+    this.drawObstacles();
+    
+    // Draw moving walls
+    this.drawMovingWalls();
+  }
+
+  private drawObstacles(): void {
+    if (this.obstacles.length === 0) return;
+    
+    this.ctx.save();
+    for (const obstacle of this.obstacles) {
+      // Draw obstacle with glow effect
+      this.ctx.shadowColor = '#ff8800';
+      this.ctx.shadowBlur = 15;
+      this.ctx.fillStyle = '#ff8800';
+      this.ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+      
+      // Draw inner highlight
+      this.ctx.shadowBlur = 0;
+      this.ctx.fillStyle = '#ffaa00';
+      this.ctx.fillRect(obstacle.x + 2, obstacle.y + 2, obstacle.width - 4, obstacle.height - 4);
+    }
+    this.ctx.restore();
+  }
+
+  private drawMovingWalls(): void {
+    if (this.movingWalls.length === 0) return;
+    
+    this.ctx.save();
+    for (const wall of this.movingWalls) {
+      // Draw moving wall with animated glow
+      const time = Date.now() * 0.005;
+      const glowIntensity = 10 + 5 * Math.sin(time);
+      
+      this.ctx.shadowColor = '#00ff88';
+      this.ctx.shadowBlur = glowIntensity;
+      this.ctx.fillStyle = '#00ff88';
+      this.ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+      
+      // Draw inner highlight
+      this.ctx.shadowBlur = 0;
+      this.ctx.fillStyle = '#88ff88';
+      this.ctx.fillRect(wall.x + 2, wall.y + 2, wall.width - 4, wall.height - 4);
+    }
+    this.ctx.restore();
+  }
+
+  private audioContext: AudioContext | null = null;
+  private audioFiles: { [key: string]: AudioBuffer } = {};
+
+  private async initAudio(): Promise<void> {
+    if (!this.config.soundEffects) {
+      console.log('🔇 Sound effects disabled, skipping audio initialization');
+      return;
+    }
+    
+    try {
+      console.log('🔊 Initializing audio system...');
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Load audio files (only the ones we have)
+      const audioFiles = [
+        'paddle-hit',
+      ];
+      
+      for (const fileName of audioFiles) {
+        console.log(`🎵 Loading audio file: ${fileName}.wav`);
+        const response = await fetch(`/audio/${fileName}.wav`);
+        if (!response.ok) {
+          console.warn(`⚠️ Failed to load audio file: ${fileName}.wav (${response.status})`);
+          continue;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        this.audioFiles[fileName] = await this.audioContext.decodeAudioData(arrayBuffer);
+        console.log(`✅ Successfully loaded: ${fileName}.wav`);
+      }
+      
+      console.log('🎉 Audio system initialized successfully!');
+    } catch (error) {
+      console.warn('❌ Audio initialization failed:', error);
     }
   }
 
-  private getPowerUpSymbol(type: PowerUpType): string {
-    switch (type) {
-      case 'paddle_size_boost': return '⬆';
-      case 'paddle_speed_boost': return '⚡';
-      case 'ball_speed_slow': return '🐌';
-      case 'ball_speed_fast': return '💨';
-      case 'shrink_opponent': return '⬇';
-      case 'reverse_controls': return '🔄';
-      case 'shield': return '🛡';
-      case 'magnet': return '🧲';
-      case 'multi_ball': return '⚪';
-      case 'curve_ball': return '🌀';
-      case 'freeze_opponent': return '❄';
-      case 'invisible_ball': return '👻';
-      default: return '?';
+  private playSound(soundName: string): void {
+    if (!this.config.soundEffects) {
+      console.log(`🔇 Sound effects disabled, not playing: ${soundName}`);
+      return;
+    }
+    
+    if (!this.audioContext) {
+      console.warn(`⚠️ Audio context not initialized, cannot play: ${soundName}`);
+      return;
+    }
+    
+    // Resume audio context if suspended (required by modern browsers)
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(error => {
+        console.warn('❌ Failed to resume audio context:', error);
+      });
+    }
+    
+    if (!this.audioFiles[soundName]) {
+      console.warn(`⚠️ Audio file not loaded: ${soundName}`);
+      return;
+    }
+    
+    try {
+    const source = this.audioContext.createBufferSource();
+    const gainNode = this.audioContext.createGain();
+    
+    source.buffer = this.audioFiles[soundName];
+    gainNode.gain.value = (this.config.volume || 70) / 100;
+    
+    source.connect(gainNode);
+    gainNode.connect(this.audioContext.destination);
+    source.start();
+      
+      console.log(`🔊 Playing sound: ${soundName} at volume: ${gainNode.gain.value}`);
+    } catch (error) {
+      console.warn(`❌ Failed to play sound ${soundName}:`, error);
     }
   }
 
-  private spawnPowerUps(): void {
-    const now = Date.now();
-    const intervalMs = 5000; // every 5s attempt spawn
-    if (now - this.lastPowerUpSpawnAtMs < intervalMs) return;
-    this.lastPowerUpSpawnAtMs = now;
-    // 40% chance to spawn
-    if (Math.random() > 0.4) return;
-
-    const availableTypes: PowerUp['type'][] = (this.config.powerUpTypes && this.config.powerUpTypes.length > 0)
-      ? (this.config.powerUpTypes as PowerUp['type'][])
-      : ['paddle_size', 'ball_speed'];
-
-    const type = availableTypes[Math.floor(Math.random() * availableTypes.length)] as PowerUp['type'];
-
-    const margin = 40;
-    const pu: PowerUp = {
-      x: margin + Math.random() * (this.config.canvasWidth - margin * 2),
-      y: margin + Math.random() * (this.config.canvasHeight - margin * 2),
-      radius: 10,
-      type,
-      active: true
-    };
-    this.powerUps.push(pu);
+  // Visual Effects Methods
+  private addScreenShake(intensity: number): void {
+    if (!this.config.screenShake) return;
+    this.screenShakeIntensity = Math.max(this.screenShakeIntensity, intensity);
   }
 
-  private updatePowerUps(): void {
-    // Despawn inactive
-    this.powerUps = this.powerUps.filter(p => p.active);
+  private createParticles(x: number, y: number, count: number, color: string, speed: number = 2): void {
+    if (!this.config.particleEffects) return;
+    
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+      const velocity = speed + Math.random() * speed;
+      
+      this.particles.push({
+        x: x + (Math.random() - 0.5) * 10,
+        y: y + (Math.random() - 0.5) * 10,
+        vx: Math.cos(angle) * velocity,
+        vy: Math.sin(angle) * velocity,
+        life: 1.0,
+        maxLife: 1.0,
+        color: color,
+        size: 2 + Math.random() * 3
+      });
+    }
   }
 
-  
-  //   if (availableTypes.length === 0) return;
-  //   
-  //   const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
-  //   
-  //   // Spawn anywhere on the field (avoiding paddle areas)
-  //   const paddleZone = 80; // Avoid 80px from each side where paddles are
-  //   const x = paddleZone + Math.random() * (this.config.canvasWidth - 2 * paddleZone);
-  //   const y = 30 + Math.random() * (this.config.canvasHeight - 60); // Avoid top/bottom edges
-  //   
-  //   const collectible: PowerUpCollectible = {
-  //     id: `collectible_${Date.now()}_${Math.random()}`,
-  //     type: randomType,
-  //     x,
-  //     y,
-  //     radius: 30,
-  //     spawnTime: Date.now(),
-  //     duration: this.collectibleLifetime,
-  //     collected: false,
-  //     glowPhase: 0
-  //   };
-  //   
-  //   this.collectiblePowerUps.push(collectible);
-  //   console.log('🎁 Spawned collectible power-up:', randomType, 'at', Math.round(x), Math.round(y));
-  //   console.log('🎁 Total collectibles on field:', this.collectiblePowerUps.length);
-  // }
+  private updateVisualEffects(): void {
+    // Update ball trail
+    if (this.config.ballTrail) {
+      this.ballTrail.push({
+        x: this.ball.x,
+        y: this.ball.y,
+        time: Date.now(),
+        alpha: 1.0
+      });
+      
+      // Remove old trail points
+      const now = Date.now();
+      this.ballTrail = this.ballTrail.filter(point => now - point.time < 1000);
+      
+      // Update alpha
+      this.ballTrail.forEach(point => {
+        const age = now - point.time;
+        point.alpha = Math.max(0, 1 - (age / 1000));
+      });
+    }
 
-  // DISABLED: Collectible power-ups removed
-  // private checkCollectibleCollision(collectible: PowerUpCollectible): void {
-  //   if (collectible.collected) return;
-  //   
-  //   const paddleHeight = this.getPaddleHeight(this.player1);
-  //   
-  //   // Player 1 paddle position (left side)
-  //   const p1X = this.config.paddleWidth / 2;
-  //   const p1Y = this.player1.y + paddleHeight / 2;
-  //   
-  //   // Player 2 paddle position (right side)  
-  //   const p2X = this.config.canvasWidth - this.config.paddleWidth / 2;
-  //   const p2Y = this.player2.y + paddleHeight / 2;
-  //   
-  //   // Debug collision detection
-  //   const p1Distance = Math.sqrt(Math.pow(collectible.x - p1X, 2) + Math.pow(collectible.y - p1Y, 2));
-  //   const p2Distance = Math.sqrt(Math.pow(collectible.x - p2X, 2) + Math.pow(collectible.y - p2Y, 2));
-  //   const collisionRadius = collectible.radius + this.config.paddleWidth + 20; // VERY large collision area
-  //   
-  //   // Check collision with player 1
-  //   if (p1Distance < collisionRadius) {
-  //     console.log('🎯 Player 1 collected power-up!', collectible.type);
-  //     console.log('   Distance:', Math.round(p1Distance), 'Required:', Math.round(collisionRadius));
-  //     this.collectPowerUp(collectible, this.player1);
-  //     return;
-  //   }
-  //   
-  //   // Check collision with player 2
-  //   if (p2Distance < collisionRadius) {
-  //     console.log('🎯 Player 2 collected power-up!', collectible.type);
-  //     console.log('   Distance:', Math.round(p2Distance), 'Required:', Math.round(collisionRadius));
-  //     this.collectPowerUp(collectible, this.player2);
-  //     return;
-  //   }
-  //   
-  //   // Debug: Show distances when close
-  //   if (p1Distance < collisionRadius + 20 || p2Distance < collisionRadius + 20) {
-  //     console.log('🔍 Close to collectible:', collectible.type);
-  //     console.log('   P1 distance:', Math.round(p1Distance), 'P2 distance:', Math.round(p2Distance));
-  //     console.log('   Required distance:', Math.round(collisionRadius));
-  //   }
-  // }
+    // Update particles
+    if (this.config.particleEffects) {
+      for (let i = this.particles.length - 1; i >= 0; i--) {
+        const particle = this.particles[i];
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        particle.vx *= 0.98; // Friction
+        particle.vy *= 0.98;
+        particle.life -= 0.02;
+        
+        if (particle.life <= 0) {
+          this.particles.splice(i, 1);
+        }
+      }
+    }
 
-  private isColliding(
-    circleX: number, circleY: number, circleRadius: number,
-    rectX: number, rectY: number, rectWidth: number, rectHeight: number
-  ): boolean {
-    const distX = Math.abs(circleX - rectX);
-    const distY = Math.abs(circleY - rectY);
-    
-    if (distX > (rectWidth / 2 + circleRadius)) return false;
-    if (distY > (rectHeight / 2 + circleRadius)) return false;
-    
-    if (distX <= (rectWidth / 2)) return true;
-    if (distY <= (rectHeight / 2)) return true;
-    
-    const dx = distX - rectWidth / 2;
-    const dy = distY - rectHeight / 2;
-    return (dx * dx + dy * dy <= (circleRadius * circleRadius));
+    // Update screen shake
+    if (this.config.screenShake && this.screenShakeIntensity > 0) {
+      this.screenShakeOffset.x = (Math.random() - 0.5) * this.screenShakeIntensity;
+      this.screenShakeOffset.y = (Math.random() - 0.5) * this.screenShakeIntensity;
+      this.screenShakeIntensity *= this.screenShakeDecay;
+      
+      if (this.screenShakeIntensity < 0.1) {
+        this.screenShakeIntensity = 0;
+        this.screenShakeOffset = { x: 0, y: 0 };
+      }
+    }
   }
 
-  // DISABLED: Collectible power-ups removed
-  // private collectPowerUp(collectible: PowerUpCollectible, player: Player): void {
-  //   collectible.collected = true;
-  //   
-  //   // Add to inventory instead of immediate activation
-  //   const playerKey = player === this.player1 ? 'player1' : 'player2';
-  //   this.addPowerUpToInventory(collectible.type, playerKey);
-  //   
-  //   // Remove from collectibles array
-  //   const index = this.collectiblePowerUps.indexOf(collectible);
-  //   if (index > -1) {
-  //     this.collectiblePowerUps.splice(index, 1);
-  //   }
-  //   
-  //   console.log('🎒 Power-up added to inventory!', collectible.type, 'for', player.name);
-  //   console.log('🎒 Total power-ups in inventory:', this.collectedPowerUps.length);
-  // }
+  // Map Variant Methods
+  private initializeMapVariant(variant: 'classic' | 'obstacles' | 'moving_walls'): void {
+    // Clear existing map elements
+    this.obstacles = [];
+    this.movingWalls = [];
+
+    switch (variant) {
+      case 'classic':
+        // No additional elements needed
+        console.log('🗺️ Classic map initialized');
+        break;
+        
+      case 'obstacles':
+        this.initializeObstacles();
+        console.log('🗺️ Obstacles map initialized');
+        break;
+        
+      case 'moving_walls':
+        this.initializeMovingWalls();
+        console.log('🗺️ Moving walls map initialized');
+        break;
+    }
+  }
+
+  private initializeObstacles(): void {
+    // Add static obstacles in the center area
+    const centerX = this.config.canvasWidth / 2;
+    const centerY = this.config.canvasHeight / 2;
+    
+    // Top obstacle
+    this.obstacles.push({
+      x: centerX - 30,
+      y: centerY - 80,
+      width: 60,
+      height: 20,
+      type: 'static'
+    });
+    
+    // Bottom obstacle
+    this.obstacles.push({
+      x: centerX - 30,
+      y: centerY + 60,
+      width: 60,
+      height: 20,
+      type: 'static'
+    });
+    
+    // Side obstacles
+    this.obstacles.push({
+      x: centerX - 100,
+      y: centerY - 20,
+      width: 20,
+      height: 40,
+      type: 'static'
+    });
+    
+    this.obstacles.push({
+      x: centerX + 80,
+      y: centerY - 20,
+      width: 20,
+      height: 40,
+      type: 'static'
+    });
+  }
+
+  private initializeMovingWalls(): void {
+    // Add moving walls that move up and down
+    this.movingWalls.push({
+      x: this.config.canvasWidth / 2 - 10,
+      y: 50,
+      width: 20,
+      height: 60,
+      direction: 'down',
+      speed: 1
+    });
+    
+    this.movingWalls.push({
+      x: this.config.canvasWidth / 2 - 10,
+      y: this.config.canvasHeight - 110,
+      width: 20,
+      height: 60,
+      direction: 'up',
+      speed: 1
+    });
+  }
+
+
+  private updateMapVariants(): void {
+    // Update moving walls
+    for (const wall of this.movingWalls) {
+      if (wall.direction === 'down') {
+        wall.y += wall.speed;
+        if (wall.y + wall.height > this.config.canvasHeight - 50) {
+          wall.direction = 'up';
+        }
+      } else {
+        wall.y -= wall.speed;
+        if (wall.y < 50) {
+          wall.direction = 'down';
+        }
+      }
+    }
+  }
+
+  private checkMapCollisions(): void {
+    // Check ball collision with obstacles
+    for (const obstacle of this.obstacles) {
+      if (this.isBallCollidingWithObstacle(obstacle)) {
+        this.handleObstacleCollision(obstacle);
+      }
+    }
+    
+    // Check ball collision with moving walls
+    for (const wall of this.movingWalls) {
+      if (this.isBallCollidingWithObstacle(wall)) {
+        this.handleObstacleCollision(wall);
+      }
+    }
+  }
+
+  private isBallCollidingWithObstacle(obstacle: { x: number; y: number; width: number; height: number }): boolean {
+    const ballLeft = this.ball.x - this.config.ballSize / 2;
+    const ballRight = this.ball.x + this.config.ballSize / 2;
+    const ballTop = this.ball.y - this.config.ballSize / 2;
+    const ballBottom = this.ball.y + this.config.ballSize / 2;
+    
+    return ballLeft < obstacle.x + obstacle.width &&
+           ballRight > obstacle.x &&
+           ballTop < obstacle.y + obstacle.height &&
+           ballBottom > obstacle.y;
+  }
+
+
+  private handleObstacleCollision(obstacle: { x: number; y: number; width: number; height: number }): void {
+    // Determine collision side and bounce accordingly
+    const ballCenterX = this.ball.x;
+    const ballCenterY = this.ball.y;
+    const obstacleCenterX = obstacle.x + obstacle.width / 2;
+    const obstacleCenterY = obstacle.y + obstacle.height / 2;
+    
+    const dx = ballCenterX - obstacleCenterX;
+    const dy = ballCenterY - obstacleCenterY;
+    
+    // Determine which side was hit
+    if (Math.abs(dx) / obstacle.width > Math.abs(dy) / obstacle.height) {
+      // Hit left or right side
+      this.ball.velocityX = -this.ball.velocityX;
+      this.ball.x = dx > 0 ? obstacle.x + obstacle.width + this.config.ballSize / 2 : obstacle.x - this.config.ballSize / 2;
+    } else {
+      // Hit top or bottom side
+      this.ball.velocityY = -this.ball.velocityY;
+      this.ball.y = dy > 0 ? obstacle.y + obstacle.height + this.config.ballSize / 2 : obstacle.y - this.config.ballSize / 2;
+    }
+    
+    // Visual and audio effects
+    this.addScreenShake(2);
+    this.createParticles(this.ball.x, this.ball.y, 6, '#ff8800', 2);
+  }
+
 
   private addPowerUpToInventory(type: PowerUpType, collector: 'player1' | 'player2'): void {
     // Convert PowerUpType to old PowerUp format for inventory
     const powerUpTypeMap: { [key in PowerUpType]: string } = {
       'paddle_size_boost': 'paddle_size',
-      'paddle_speed_boost': 'ball_speed',
-      'ball_speed_slow': 'slow_opponent',
-      'ball_speed_fast': 'ball_speed',
-      'shrink_opponent': 'shrink_opponent',
-      'reverse_controls': 'reverse_controls',
-      'shield': 'shield',
-      'magnet': 'magnet',
+      'paddle_speed_boost': 'paddle_speed',
       'multi_ball': 'multi_ball',
-      'curve_ball': 'curve_ball',
-      'freeze_opponent': 'slow_opponent',
-      'invisible_ball': 'ball_speed'
+      'freeze_opponent': 'freeze_opponent',
+      'invisible_ball': 'invisible_ball'
     };
 
     const oldType = powerUpTypeMap[type] || 'paddle_size';
@@ -1355,73 +1596,6 @@ export class PongGame {
     console.log('📦 Added to inventory:', oldType, 'for', collector);
   }
 
-  private applyPowerUpEffect(type: PowerUpType, player: Player): void {
-    const now = Date.now();
-    const duration = 8000; // 8 seconds
-    
-    switch (type) {
-      case 'paddle_size_boost':
-        player.temporaryPaddleBoostUntilMs = now + duration;
-        break;
-      case 'paddle_speed_boost':
-        // This will be handled in getEffectivePaddleSpeed
-        break;
-      case 'ball_speed_slow':
-        // Slow down ball temporarily
-        this.ball.velocityX *= 0.7;
-        this.ball.velocityY *= 0.7;
-        break;
-      case 'ball_speed_fast':
-        // Speed up ball temporarily
-        this.ball.velocityX *= 1.3;
-        this.ball.velocityY *= 1.3;
-        break;
-      case 'shrink_opponent':
-        const opponent = player === this.player1 ? this.player2 : this.player1;
-        opponent.temporaryPaddleShrinkUntilMs = now + duration;
-        break;
-      case 'reverse_controls':
-        const opponent2 = player === this.player1 ? this.player2 : this.player1;
-        opponent2.temporaryReverseControlsUntilMs = now + duration;
-        break;
-      case 'shield':
-        player.temporaryShieldUntilMs = now + duration;
-        break;
-      case 'magnet':
-        player.temporaryMagnetUntilMs = now + duration;
-        break;
-      case 'multi_ball':
-        this.spawnExtraBalls(2);
-        break;
-      case 'curve_ball':
-        this.nextHitCurveFor = player === this.player1 ? 'player1' : 'player2';
-        break;
-      case 'freeze_opponent':
-        const opponent3 = player === this.player1 ? this.player2 : this.player1;
-        opponent3.temporaryPaddleSlowUntilMs = now + duration;
-        break;
-      case 'invisible_ball':
-        // This would need special rendering logic
-        break;
-    }
-  }
-
-  private spawnExtraBalls(count: number): void {
-    for (let i = 0; i < count; i++) {
-      const angle = (Math.PI / 4) + (Math.random() - 0.5) * (Math.PI / 2);
-      const speed = this.config.ballSpeed * 0.8;
-      this.extraBalls.push({
-        x: this.ball.x,
-        y: this.ball.y,
-        velocityX: Math.cos(angle) * speed * (Math.random() > 0.5 ? 1 : -1),
-        velocityY: Math.sin(angle) * speed * (Math.random() > 0.5 ? 1 : -1),
-        speed: speed,
-        radius: this.ball.radius
-      });
-    }
-    console.log(`🎾 Spawned ${count} extra balls!`);
-  }
-
   private updateExtraBalls(): void {
     for (let i = this.extraBalls.length - 1; i >= 0; i--) {
       const ball = this.extraBalls[i];
@@ -1434,6 +1608,10 @@ export class PongGame {
       if (ball.y <= ball.radius || ball.y >= this.config.canvasHeight - ball.radius) {
         ball.velocityY = -ball.velocityY;
         ball.y = Math.max(ball.radius, Math.min(ball.y, this.config.canvasHeight - ball.radius));
+        
+        // Visual effects
+        this.addScreenShake(1);
+        this.createParticles(ball.x, ball.y, 4, '#ff8800', 2);
       }
       
       // Check scoring (remove ball if it goes off screen)
@@ -1444,6 +1622,9 @@ export class PongGame {
       
       // Check paddle collisions
       this.checkExtraBallCollision(ball);
+      
+      // Check map collisions for extra balls
+      this.checkExtraBallMapCollisions(ball);
     }
   }
 
@@ -1464,6 +1645,11 @@ export class PongGame {
         ball.velocityX = -ball.velocityX;
         ball.x = p1Right + ball.radius;
         ball.lastHitBy = 'player1';
+        this.playSound('paddle-hit');
+        
+        // Visual effects
+        this.addScreenShake(2);
+        this.createParticles(ball.x, ball.y, 6, '#00fff7', 2);
       }
     }
 
@@ -1478,32 +1664,68 @@ export class PongGame {
         ball.velocityX = -ball.velocityX;
         ball.x = p2X - ball.radius;
         ball.lastHitBy = 'player2';
+        this.playSound('paddle-hit');
+        
+        // Visual effects
+        this.addScreenShake(2);
+        this.createParticles(ball.x, ball.y, 6, '#ff00ea', 2);
       }
     }
   }
 
-  private notify(message: string): void {
-    try {
-      const fn = (window as any)?.showMessage;
-      if (typeof fn === 'function') fn(message, 'info');
-    } catch {}
+  private checkExtraBallMapCollisions(ball: Ball): void {
+    // Check collision with obstacles
+    for (const obstacle of this.obstacles) {
+      if (this.isExtraBallCollidingWithObstacle(ball, obstacle)) {
+        this.handleExtraBallObstacleCollision(ball, obstacle);
+      }
+    }
+    
+    // Check collision with moving walls
+    for (const wall of this.movingWalls) {
+      if (this.isExtraBallCollidingWithObstacle(ball, wall)) {
+        this.handleExtraBallObstacleCollision(ball, wall);
+      }
+    }
   }
 
-  // Removed duplicate collectPowerUp method - using new collectible system
+  private isExtraBallCollidingWithObstacle(ball: Ball, obstacle: { x: number; y: number; width: number; height: number }): boolean {
+    const ballLeft = ball.x - ball.radius;
+    const ballRight = ball.x + ball.radius;
+    const ballTop = ball.y - ball.radius;
+    const ballBottom = ball.y + ball.radius;
+    
+    return ballLeft < obstacle.x + obstacle.width &&
+           ballRight > obstacle.x &&
+           ballTop < obstacle.y + obstacle.height &&
+           ballBottom > obstacle.y;
+  }
 
-  private getPowerUpName(type: string): string {
-    const names: { [key: string]: string } = {
-      'paddle_size': 'Paddle Size Boost',
-      'ball_speed': 'Ball Speed Boost',
-      'slow_opponent': 'Slow Opponent',
-      'shrink_opponent': 'Shrink Opponent',
-      'curve_ball': 'Curve Ball',
-      'multi_ball': 'Multi-Ball',
-      'reverse_controls': 'Reverse Controls',
-      'shield': 'Shield',
-      'magnet': 'Magnet'
-    };
-    return names[type] || type;
+
+  private handleExtraBallObstacleCollision(ball: Ball, obstacle: { x: number; y: number; width: number; height: number }): void {
+    // Determine collision side and bounce accordingly
+    const ballCenterX = ball.x;
+    const ballCenterY = ball.y;
+    const obstacleCenterX = obstacle.x + obstacle.width / 2;
+    const obstacleCenterY = obstacle.y + obstacle.height / 2;
+    
+    const dx = ballCenterX - obstacleCenterX;
+    const dy = ballCenterY - obstacleCenterY;
+    
+    // Determine which side was hit
+    if (Math.abs(dx) / obstacle.width > Math.abs(dy) / obstacle.height) {
+      // Hit left or right side
+      ball.velocityX = -ball.velocityX;
+      ball.x = dx > 0 ? obstacle.x + obstacle.width + ball.radius : obstacle.x - ball.radius;
+    } else {
+      // Hit top or bottom side
+      ball.velocityY = -ball.velocityY;
+      ball.y = dy > 0 ? obstacle.y + obstacle.height + ball.radius : obstacle.y - ball.radius;
+    }
+    
+    // Visual and audio effects
+    this.addScreenShake(1);
+    this.createParticles(ball.x, ball.y, 4, '#ff8800', 2);
   }
 
   private resumeGame(): void {
@@ -1512,8 +1734,6 @@ export class PongGame {
       console.log('Game resumed');
     }
   }
-
-  // pauseGame method already exists as public method
 
   private activateCollectedPowerUp(requestingPlayer?: 'player1' | 'player2'): void {
     if (this.collectedPowerUps.length === 0) return;
@@ -1524,45 +1744,20 @@ export class PongGame {
 
     const powerUp = this.collectedPowerUps.splice(powerUpIndex, 1)[0];
     const player = requestingPlayer === 'player1' ? this.player1 : this.player2;
+    const opponent = requestingPlayer === 'player1' ? this.player2 : this.player1;
     
-    // Simple effects - just paddle size boost
-    if (powerUp.type === 'paddle_size') {
-      player.temporaryPaddleBoostUntilMs = Date.now() + 5000; // 5 seconds
-      console.log('Paddle boost activated for', requestingPlayer);
-    }
-  }
-
-  private applyPowerUp(pu: PowerUp, collector: 'player1' | 'player2'): void {
-    const opponent = collector === 'player1' ? 'player2' : 'player1';
-    switch (pu.type) {
+    console.log(`🎮 ${requestingPlayer} activated ${powerUp.type} powerup!`);
+    
+    // Implement powerup effects for the 5 selected powerups
+    switch (powerUp.type) {
       case 'paddle_size': {
-        const target = collector === 'player1' ? this.player1 : this.player2;
-        target.temporaryPaddleBoostUntilMs = Date.now() + 6000;
-        this.notify(`🟢 Paddle Size Boost activated for ${collector === 'player1' ? this.player1.name : this.player2.name}!`);
+        player.temporaryPaddleBoostUntilMs = Date.now() + 8000; // 8 seconds
+        this.notify(`🟢 Paddle Size Boost activated for ${player.name}!`);
         break;
       }
-      case 'ball_speed': {
-        const multiplier = 1.3;
-        this.ball.velocityX *= multiplier;
-        this.ball.velocityY *= multiplier;
-        this.notify('🟠 Ball Speed Boost activated!');
-        break;
-      }
-      case 'slow_opponent': {
-        const target = opponent === 'player1' ? this.player1 : this.player2;
-        target.temporaryPaddleSlowUntilMs = Date.now() + 6000;
-        this.notify(`🔵 Slow Opponent applied to ${opponent === 'player1' ? this.player1.name : this.player2.name}!`);
-        break;
-      }
-      case 'shrink_opponent': {
-        const target = opponent === 'player1' ? this.player1 : this.player2;
-        target.temporaryPaddleShrinkUntilMs = Date.now() + 6000;
-        this.notify(`🟣 Shrink Opponent applied to ${opponent === 'player1' ? this.player1.name : this.player2.name}!`);
-        break;
-      }
-      case 'curve_ball': {
-        this.nextHitCurveFor = collector;
-        this.notify('🔮 Curve Ball primed for next hit!');
+      case 'paddle_speed': {
+        player.temporaryPaddleSpeedBoostUntilMs = Date.now() + 8000;
+        this.notify(`💨 Paddle Speed Boost activated for ${player.name}!`);
         break;
       }
       case 'multi_ball': {
@@ -1577,130 +1772,133 @@ export class PongGame {
             velocityY: Math.sin(angle) * speed,
             speed: speed,
             radius: this.config.ballSize,
-            lastHitBy: collector
+            lastHitBy: requestingPlayer
           });
         }
-        this.notify('🟠 Multi-Ball activated! 2 extra balls spawned!');
+        this.notify(`🟠 Multi-Ball activated! 2 extra balls spawned!`);
         break;
       }
-      case 'reverse_controls': {
-        const target = opponent === 'player1' ? this.player1 : this.player2;
-        target.temporaryReverseControlsUntilMs = Date.now() + 5000;
-        this.notify(`🔄 Reverse Controls applied to ${opponent === 'player1' ? this.player1.name : this.player2.name}!`);
+      case 'freeze_opponent': {
+        opponent.temporaryPaddleSlowUntilMs = Date.now() + 3000;
+        this.notify(`❄️ Freeze Opponent applied to ${opponent.name}!`);
         break;
       }
-      case 'shield': {
-        const target = collector === 'player1' ? this.player1 : this.player2;
-        target.temporaryShieldUntilMs = Date.now() + 8000;
-        this.notify(`🛡️ Shield activated for ${collector === 'player1' ? this.player1.name : this.player2.name}!`);
+      case 'invisible_ball': {
+        this.ball.temporaryInvisibleUntilMs = Date.now() + 4000;
+        this.notify(`👻 Invisible Ball activated!`);
         break;
       }
-      case 'magnet': {
-        const target = collector === 'player1' ? this.player1 : this.player2;
-        target.temporaryMagnetUntilMs = Date.now() + 10000;
-        this.notify(`🧲 Magnet activated for ${collector === 'player1' ? this.player1.name : this.player2.name}!`);
+      default: {
+        console.warn(`Unknown powerup type: ${powerUp.type}`);
         break;
       }
     }
   }
 
-  private checkPowerUpCollision(): void {
-    for (const pu of this.powerUps) {
-      if (!pu.active) continue;
-      const dx = this.ball.x - pu.x;
-      const dy = this.ball.y - pu.y;
-      const distSq = dx * dx + dy * dy;
-      const r = pu.radius + this.config.ballSize;
-      if (distSq <= r * r) {
-        // Old power-up system disabled - using new collectible system
-        // const last = this.ball.lastHitBy || 'player1';
-        // this.collectPowerUp(pu, last);
-        pu.active = false;
+  private notify(message: string): void {
+    try {
+      const fn = (window as any)?.showMessage;
+      if (typeof fn === 'function') fn(message, 'info');
+    } catch {}
+  }
+
+  private spawnFloatingPowerUps(): void {
+    const now = Date.now();
+    if (now - this.lastPowerUpSpawnAtMs < this.powerUpSpawnInterval) return;
+    if (this.floatingPowerUps.length >= 3) return; // Max 3 floating powerups
+
+    // Get available powerup types from customization
+    const availableTypes = this.config.powerUpTypes || ['paddle_size', 'ball_speed', 'slow_opponent'];
+    const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+
+    // Spawn at random position in center area
+    const x = this.config.canvasWidth / 2 + (Math.random() - 0.5) * 200;
+    const y = this.config.canvasHeight / 2 + (Math.random() - 0.5) * 200;
+
+    const powerUp: PowerUp = {
+      x: x,
+      y: y,
+      radius: 15,
+      type: randomType as any,
+      active: true
+    };
+
+    this.floatingPowerUps.push(powerUp);
+    this.lastPowerUpSpawnAtMs = now;
+    console.log(`✨ Spawned floating powerup: ${randomType} at (${x.toFixed(0)}, ${y.toFixed(0)})`);
+  }
+
+  private updateFloatingPowerUps(): void {
+    for (let i = this.floatingPowerUps.length - 1; i >= 0; i--) {
+      const powerUp = this.floatingPowerUps[i];
+      
+      // Animate floating motion
+      powerUp.y += Math.sin(Date.now() * 0.003 + i) * 0.5;
+      
+      // Check collision with ball
+      if (this.isBallCollidingWithPowerUp(powerUp)) {
+        this.collectFloatingPowerUp(powerUp, i);
+      }
+      
+      // Remove old powerups (30 seconds lifetime)
+      if (Date.now() - this.lastPowerUpSpawnAtMs > 30000) {
+        this.floatingPowerUps.splice(i, 1);
       }
     }
   }
 
-  private drawPowerUpInventory(): void {
-    if (this.collectedPowerUps.length === 0) return;
+  private isBallCollidingWithPowerUp(powerUp: PowerUp): boolean {
+    const dx = this.ball.x - powerUp.x;
+    const dy = this.ball.y - powerUp.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    return distance < (this.ball.radius + powerUp.radius);
+  }
 
+  private collectFloatingPowerUp(powerUp: PowerUp, index: number): void {
+    // Determine collector based on ball direction
+    const collector = this.ball.velocityX > 0 ? 'player1' : 'player2';
+    
+    // Add to inventory
+    this.addPowerUpToInventory(powerUp.type as any, collector);
+    
+    // Remove from floating powerups
+    this.floatingPowerUps.splice(index, 1);
+    
+    // Visual effects
+    this.addScreenShake(2);
+    this.createParticles(powerUp.x, powerUp.y, 8, this.getPowerUpColor(powerUp.type), 3);
+    
+    console.log(`🎯 ${collector} collected floating powerup: ${powerUp.type}`);
+  }
+
+  private drawFloatingPowerUps(): void {
+    for (const powerUp of this.floatingPowerUps) {
     this.ctx.save();
     
-    // Position at bottom-left corner, smaller size
-    const x = 10;
-    const y = this.config.canvasHeight - 80;
-    const width = 250;
-    const height = 70;
-    
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-    this.ctx.fillRect(x, y, width, height);
-    this.ctx.strokeStyle = '#00ff88';
-    this.ctx.lineWidth = 2;
-    this.ctx.strokeRect(x, y, width, height);
-
-    this.ctx.fillStyle = '#00ff88';
-    this.ctx.font = 'bold 12px Arial';
-    this.ctx.fillText(`🎒 Inventory: ${this.collectedPowerUps.length} power-ups`, x + 10, y + 20);
-    
-    this.ctx.font = '10px Arial';
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillText(`${this.player1.name}: Press A | ${this.player2.name}: Press T`, x + 10, y + 40);
-    
-    // Show power-ups for each player
-    const p1PowerUps = this.collectedPowerUps.filter(pu => pu.collector === 'player1').length;
-    const p2PowerUps = this.collectedPowerUps.filter(pu => pu.collector === 'player2').length;
-    
-    this.ctx.fillStyle = '#ffff00';
-    this.ctx.fillText(`P1: ${p1PowerUps} | P2: ${p2PowerUps}`, x + 10, y + 60);
-    
-    // Show next power-up icon and remaining uses
-    if (this.collectedPowerUps.length > 0) {
-      const next = this.collectedPowerUps[0];
-      const collector = next.collector || 'player1';
-      const playerPowerUps = collector === 'player1' ? this.config.player1PowerUps : this.config.player2PowerUps;
-      const remaining = playerPowerUps?.[next.type] || 0;
+      // Pulsing effect
+      const pulse = 1 + Math.sin(Date.now() * 0.005) * 0.2;
+      const radius = powerUp.radius * pulse;
       
-      const colors = {
-        'paddle_size': '#00ff88',
-        'ball_speed': '#ffaa00',
-        'slow_opponent': '#ff4444',
-        'shrink_opponent': '#ff66ff',
-        'curve_ball': '#66aaff',
-        'multi_ball': '#ff8800',
-        'reverse_controls': '#ff0080',
-        'shield': '#00ffff',
-        'magnet': '#ffff00'
-      };
-      this.ctx.fillStyle = colors[next.type] || '#ffffff';
+      // Glow effect
+      this.ctx.shadowColor = this.getPowerUpColor(powerUp.type);
+      this.ctx.shadowBlur = 15;
+      
+      // Draw powerup orb
+      this.ctx.fillStyle = this.getPowerUpColor(powerUp.type);
       this.ctx.beginPath();
-      this.ctx.arc(200, 40, 8, 0, Math.PI * 2);
+      this.ctx.arc(powerUp.x, powerUp.y, radius, 0, Math.PI * 2);
       this.ctx.fill();
       
-      // Show remaining uses
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.font = '10px Arial';
-      this.ctx.fillText(`Uses: ${remaining}`, 20, 70);
-    }
-    
-    this.ctx.restore();
-  }
-
-  private drawPowerUpInstructions(): void {
-    this.ctx.save();
-    
-    const centerX = this.config.canvasWidth / 2;
-    const centerY = this.config.canvasHeight / 2;
-    
-    // Simple background
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    this.ctx.fillRect(centerX - 150, centerY - 40, 300, 80);
-    
-    // Simple text
+      // Draw symbol
     this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = '16px Arial';
+      this.ctx.font = 'bold 16px Arial';
     this.ctx.textAlign = 'center';
-    this.ctx.fillText(`${this.player1.name}: A key | ${this.player2.name}: T key`, centerX, centerY - 10);
+      this.ctx.textBaseline = 'middle';
+      this.ctx.shadowBlur = 0;
+      this.ctx.fillText(this.getPowerUpSymbol(powerUp.type), powerUp.x, powerUp.y);
     
     this.ctx.restore();
+    }
   }
 
   private drawScores(): void {
@@ -1749,56 +1947,102 @@ export class PongGame {
     }
   }
 
-  private handleAIPowerUps(): void {
-    // Auto-collect power-ups when AI paddle touches them
-    for (const pu of this.powerUps) {
-      if (!pu.active) continue;
-      
-      const aiX = this.config.canvasWidth - this.config.paddleWidth;
-      const aiY = this.player2.y;
-      const aiHeight = this.getPaddleHeight(this.player2);
-      
-      const distance = Math.sqrt(
-        Math.pow(pu.x - aiX, 2) + 
-        Math.pow(pu.y - (aiY + aiHeight / 2), 2)
-      );
-      
-      if (distance < pu.radius + this.config.paddleWidth / 2) {
-        // Old power-up system disabled - using new collectible system
-        // this.collectPowerUp(pu, 'player2');
-        pu.active = false;
-      }
-    }
+  private drawPowerUpInventory(): void {
+    if (this.collectedPowerUps.length === 0) return;
+
+    this.ctx.save();
     
-    // Strategically use power-ups
-    if (this.collectedPowerUps.length > 0 && Math.random() < 0.3) {
-      // 30% chance per frame to use power-up when available
-      const powerUp = this.collectedPowerUps.find(pu => pu.collector === 'player2');
-      if (powerUp) {
-        this.activateAIPowerUp();
-      }
-    }
+    // Position at bottom-left corner, smaller size
+    const x = 10;
+    const y = this.config.canvasHeight - 100;
+    const width = 300;
+    const height = 90;
+    
+    // Background
+    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    this.ctx.fillRect(x, y, width, height);
+    this.ctx.strokeStyle = '#00ff88';
+    this.ctx.lineWidth = 2;
+    this.ctx.strokeRect(x, y, width, height);
+
+    // Title
+    this.ctx.fillStyle = '#00ff88';
+    this.ctx.font = 'bold 14px Arial';
+    this.ctx.fillText(`Power-up Inventory`, x + 10, y + 20);
+    
+    // Instructions
+    this.ctx.font = '10px Arial';
+    this.ctx.fillStyle = '#ffffff';
+    this.ctx.fillText(`${this.player1.name}: Press A | ${this.player2.name}: Press T`, x + 10, y + 35);
+    
+    // Show power-ups for each player
+    const p1PowerUps = this.collectedPowerUps.filter(pu => pu.collector === 'player1');
+    const p2PowerUps = this.collectedPowerUps.filter(pu => pu.collector === 'player2');
+    
+    this.ctx.fillStyle = '#ffff00';
+    this.ctx.fillText(`P1: ${p1PowerUps.length} | P2: ${p2PowerUps.length}`, x + 10, y + 50);
+    
+    // Show power-up icons for each player
+    const iconSize = 20;
+    const spacing = 25;
+    
+    // Player 1 powerups (left side)
+    p1PowerUps.forEach((powerUp, index) => {
+      const iconX = x + 10 + (index * spacing);
+      const iconY = y + 65;
+      
+      this.ctx.fillStyle = this.getPowerUpColor(powerUp.type);
+      this.ctx.beginPath();
+      this.ctx.arc(iconX + iconSize/2, iconY + iconSize/2, iconSize/2, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      // Power-up symbol
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.font = '12px Arial';
+      this.ctx.textAlign = 'center';
+      this.ctx.fillText(this.getPowerUpSymbol(powerUp.type), iconX + iconSize/2, iconY + iconSize/2 + 4);
+    });
+    
+    // Player 2 powerups (right side)
+    p2PowerUps.forEach((powerUp, index) => {
+      const iconX = x + 150 + (index * spacing);
+      const iconY = y + 65;
+      
+      this.ctx.fillStyle = this.getPowerUpColor(powerUp.type);
+      this.ctx.beginPath();
+      this.ctx.arc(iconX + iconSize/2, iconY + iconSize/2, iconSize/2, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      // Power-up symbol
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.font = '12px Arial';
+      this.ctx.textAlign = 'center';
+      this.ctx.fillText(this.getPowerUpSymbol(powerUp.type), iconX + iconSize/2, iconY + iconSize/2 + 4);
+    });
+    
+    this.ctx.restore();
   }
 
-  private activateAIPowerUp(): void {
-    // AI logic for power-up activation
-    const aiPowerUps = this.collectedPowerUps.filter(pu => pu.collector === 'player2');
-    if (aiPowerUps.length === 0) return;
-    
-    // Choose power-up based on strategy
-    const powerUp = aiPowerUps[0]; // Use first available for simplicity
-    const playerPowerUps = this.config.player2PowerUps;
-    
-    if (playerPowerUps && playerPowerUps[powerUp.type] && playerPowerUps[powerUp.type] > 0) {
-      playerPowerUps[powerUp.type]--;
-      this.applyPowerUp(powerUp, 'player2');
-      
-      // Remove from collected power-ups
-      const index = this.collectedPowerUps.indexOf(powerUp);
-      if (index > -1) {
-        this.collectedPowerUps.splice(index, 1);
-      }
-    }
+  private getPowerUpColor(type: string): string {
+    const colors: { [key: string]: string } = {
+      'paddle_size': '#00ff88',
+      'paddle_speed': '#00ccff',
+      'multi_ball': '#ff8800',
+      'freeze_opponent': '#88ccff',
+      'invisible_ball': '#cccccc'
+    };
+    return colors[type] || '#ffffff';
+  }
+
+  private getPowerUpSymbol(type: string): string {
+    const symbols: { [key: string]: string } = {
+      'paddle_size': '⬆',
+      'paddle_speed': '💨',
+      'multi_ball': '⚪',
+      'freeze_opponent': '❄',
+      'invisible_ball': '👻'
+    };
+    return symbols[type] || '?';
   }
 
   private initializeAIPersonality(): void {
@@ -1839,10 +2083,6 @@ export class PongGame {
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
     }
-    
-    // Remove event listeners (if needed for cleanup)
-    // Note: In a real implementation, you might want to store listener references
-    // for proper cleanup
   }
 }
 

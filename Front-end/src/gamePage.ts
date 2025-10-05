@@ -1,7 +1,7 @@
 // @ts-ignore
 import { PongGame, create1v1Game, createAIGame, Player } from './pongGame.js';
-import { showOpponentUsernameModal } from './components/OpponentUsernameModal';
-// Game customization removed
+import { showGameCustomizationModal } from './components/GameCustomizationModal.js';
+import type { GameCustomizationSettings } from './components/GameCustomization.js';
 /// <reference path="./services/api.d.ts" />
 // Game Page Component - Handles the actual game interface
 
@@ -122,18 +122,20 @@ export class GamePage {
         if (this.game) this.game.matchId = 0;
         if (this.game) this.game.tournamentId = this.getTournamentIdFromContext();
         this.setupGameCallbacks();
-        console.log('[DEBUG] Tournament: Game started with matchId 0 and tournamentId', this.game.tournamentId);
+        if (this.game) {
+          console.log('[DEBUG] Tournament: Game started with matchId 0 and tournamentId', this.game.tournamentId);
+        }
       });
     } else {
-      // Only show modal for direct 1v1 (not tournament)
-      this.gameMode = '1v1';
-      this.renderGameInterface();
-      console.log('[DEBUG] Showing opponent username modal for direct 1v1');
-      import('./components/OpponentUsernameModal').then(({ showOpponentUsernameModal }) => {
-        showOpponentUsernameModal((opponentUsername: string) => {
-          this.initializeGameWithOpponent(opponentUsername);
+        // Only show modal for direct 1v1 (not tournament)
+        this.gameMode = '1v1';
+        this.renderGameInterface();
+        console.log('[DEBUG] Showing opponent username modal for direct 1v1');
+        import('./components/OpponentUsernameModal').then(({ showOpponentUsernameModal }) => {
+          showOpponentUsernameModal((opponentUsername: string) => {
+            this.initializeGameWithOpponent(opponentUsername);
+          });
         });
-      });
     }
   }
 
@@ -210,6 +212,9 @@ export class GamePage {
               <div class="game-status" id="game-status">Ready to Play</div>
             </div>
             <div style="display:flex; gap:.5rem;">
+              <button id="settings-btn" class="game-btn secondary">
+                <i class="fas fa-cogs"></i>
+              </button>
               <button id="fullscreen-btn" class="game-btn secondary">
                 <i class="fas fa-expand"></i>
               </button>
@@ -369,7 +374,9 @@ export class GamePage {
                 console.log('[DEBUG] 1v1 player names set (initializeGame):', { player1Name, player2Name });
                 
                 this.setupGameCallbacks();
-                console.log('[hanieh added] 1v1 game created with matchId:', this.game.matchId);
+                if (this.game) {
+                  console.log('[hanieh added] 1v1 game created with matchId:', this.game.matchId);
+                }
               } else {
                 errorDiv.textContent = 'Game canvas not found.';
                 errorDiv.style.display = 'block';
@@ -432,10 +439,27 @@ export class GamePage {
     });
   }
 
-    // hanieh added: openSettingsModal is not used, but kept for future settings modal logic
-  // @ts-ignore
+    // hanieh added: openSettingsModal now implements game customization
   private openSettingsModal(): void {
-    // Settings modal removed
+    // Determine which features to show based on game mode
+    const availableFeatures = this.gameMode === 'tournament' ? 
+      ['visual', 'controls', 'powerups'] : // Tournament mode - no game rules changes
+      ['visual', 'gameplay', 'powerups', 'controls', 'advanced']; // Other modes - full customization
+    
+    showGameCustomizationModal({
+      mode: 'in-game',
+      availableFeatures,
+      onApply: (settings: GameCustomizationSettings) => {
+        // Apply settings to current game if running
+        if (this.game) {
+          this.game.updateConfig(settings);
+        }
+        console.log('Game settings applied:', settings);
+      },
+      onClose: () => {
+        console.log('Settings modal closed');
+      }
+    });
   }
 
   private setupEventListeners(): void {
@@ -448,7 +472,11 @@ export class GamePage {
       }
     });
 
-    // Settings button removed
+    // Settings button  
+    const settingsBtn = document.getElementById('settings-btn');
+    settingsBtn?.addEventListener('click', () => {
+      this.openSettingsModal();
+    });
 
     // Fullscreen button
     const fullscreenBtn = document.getElementById('fullscreen-btn');

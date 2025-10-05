@@ -1,10 +1,8 @@
 import "./styles/style.css"; // Ensure your CSS is imported
 import "./styles/game-page.css"; // Game page styles
-// Game customization styles removed
 import { createProfileSettings } from "./components/ProfileSettings";
 import { showTournamentBracketModal } from './components/TournamentModal';
 import { createFriendsSection } from "./components/FriendsSection";
-// Game customization removed
 import { languageManager } from "./translations";
 import { create1v1GamePage, createAIGamePage } from "./gamePage.js";
 import { apiService } from "./services/api";
@@ -328,12 +326,11 @@ async function callLogoutAPI(): Promise<void> {
   try {
     const token = sessionStorage.getItem('token');
     if (token) {
-      console.log('[🚪 LOGOUT] Calling logout API...');
-      await apiService.users.logout();
-      console.log('[✅ LOGOUT] Logout API call successful');
+      console.log('[🚪 LOGOUT] Logout completed - session cleared');
+      // No API call needed as the backend doesn't require explicit logout
     }
   } catch (error) {
-    console.error('[❌ LOGOUT] Logout API call failed:', error);
+    console.error('[❌ LOGOUT] Logout failed:', error);
     // Don't show error to user, just log it
   }
 }
@@ -1079,7 +1076,6 @@ function showAIDifficultyModal(): void {
       showTournamentBracketModal();
     });
     
-    // Customization button removed
     
   } else {
     // Login required section

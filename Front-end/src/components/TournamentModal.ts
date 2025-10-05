@@ -1281,27 +1281,10 @@ async function showMatchmakingAnimation(players: string[], tournamentId: number 
   });
 }
 
-// New function that uses backend tournament data
-async function showBracketWithBackendMatches(players: string[], tournamentId: number) {
-  try {
-    // Fetch tournament matches from backend
-    const { apiService } = await import('../services/api');
-    const tournamentData = await apiService.tournaments.getById(tournamentId);
-    console.log('[DEBUG] Tournament data:', tournamentData);
-    
-    // Show bracket with real backend matches
-    showBracket(players);
-    
-  } catch (error) {
-    console.error('Error fetching tournament data:', error);
-    // Fallback to local bracket
-    showBracket(players);
-  }
-}
 
 function showBracket(players: string[]) {
   // Helper to fetch matches for a tournament
-  async function fetchTournamentMatches(tournamentId) {
+  async function fetchTournamentMatches(tournamentId: number) {
   const { apiService } = await import('../services/api');
   // hanieh added: use tournaments.getById
   const response = await apiService.tournaments.getById(tournamentId);
@@ -1464,7 +1447,7 @@ function showBracket(players: string[]) {
   }
   // Patch selectWinner to enable Match 2 when Match 1 is done
   const originalSelectWinner = selectWinner;
-  selectWinner = function(playerElement, matchNumber) {
+  (selectWinner as any) = function(playerElement: HTMLElement, matchNumber: string | number) {
     originalSelectWinner(playerElement, matchNumber);
     enableMatch2IfReady();
   };
@@ -1504,7 +1487,7 @@ function showBracket(players: string[]) {
             (window as any).globalBackendMatches = latestMatches;
             
             // Look for final match in the updated matches
-            const finalMatch = latestMatches.find(match => match.round === 'final');
+            const finalMatch = latestMatches.find((match: any) => match.round === 'final');
             if (finalMatch) {
               matchId = finalMatch.matchId;
               console.log('[DEBUG] Found final match with ID:', matchId);
@@ -1588,8 +1571,6 @@ function showBracket(players: string[]) {
                   // Submit result to backend using your friend's tournament endpoint
                   (async () => {
                     try {
-                      const apiModule = await import('../services/api.js');
-                      const apiService = apiModule.apiService;
                       
                       // Get tournament ID from stored data
                       const tournamentId = (window as any).currentTournamentId;
@@ -1719,9 +1700,9 @@ function showBracket(players: string[]) {
                 console.log('[DEBUG] Local tournament match ended. Winner:', winnerName, 'Scores:', player1Score, player2Score);
                 
                 // Submit result to tournament API using our new approach
-                const { apiService } = await import('../services/api.js');
                 const globalTournamentId = (window as any).globalTournamentId;
                 if (globalTournamentId) {
+                  const { apiService } = await import('../services/api.js');
                   await apiService.tournaments.finish(globalTournamentId, {
                     matchId: matchId,
                     player1Score: player1Score,
@@ -1992,9 +1973,12 @@ function showBracket(players: string[]) {
     const lineId = `line${matchNumber}`;
     const line = document.getElementById(lineId);
     if (line) {
-      line.classList.add('active');
+      line!.classList.add('active');
       setTimeout(() => {
-        line.classList.add('active');
+        const lineElement = document.getElementById(lineId);
+        if (lineElement) {
+          lineElement.classList.add('active');
+        }
       }, 100);
     }
   }
@@ -2024,33 +2008,6 @@ function showBracket(players: string[]) {
   function showChampionAlert(champion: string) {
     alert(`🏆🎉 TOURNAMENT CHAMPION 🎉🏆\n\n${champion.toUpperCase()}\n\nCongratulations on your victory!\n\n🥇 You are the ultimate champion! 🥇`);
   }
-  function resetTournament() {
-    matchWinners = {};
-    // Reset all players
-    bracket.querySelectorAll('.player').forEach(player => {
-      player.classList.remove('winner');
-    });
-    // Reset final match players
-    const finalPlayers = bracket.querySelectorAll('.final-match .player');
-    finalPlayers[0].textContent = 'Winner of Match 1';
-    finalPlayers[0].className = 'player placeholder';
-    (finalPlayers[0] as HTMLElement).onclick = null;
-    finalPlayers[0].removeAttribute('data-player');
-    finalPlayers[1].textContent = 'Winner of Match 2';
-    finalPlayers[1].className = 'player placeholder';
-    (finalPlayers[1] as HTMLElement).onclick = null;
-    finalPlayers[1].removeAttribute('data-player');
-    // Reset connection lines
-    bracket.querySelectorAll('.connection-line').forEach(line => {
-      line.classList.remove('active');
-    });
-  }
-  function newTournament() {
-    if (confirm('🔄 Start a completely new tournament?\n\nThis will reset all progress.')) {
-      resetTournament();
-      alert('🆕 New tournament ready!\n\nGood luck to all players! 🍀');
-    }
-  }
   // Attach event listeners - DISABLED manual selection
   // Manual player selection disabled - winners determined automatically by game results
   console.log('[DEBUG] Manual player selection disabled - winners determined by game results');
@@ -2064,16 +2021,3 @@ function showBracket(players: string[]) {
   // controls removed
 }
 
-function createMatchBox(playerA: string, playerB: string, label: string, isFinal: boolean = false) {
-  const box = document.createElement('div');
-  box.className = isFinal ? 'match finals-match' : 'match';
-  box.innerHTML = `
-    <div class="match-header">${label}</div>
-    <div class="players">
-      <div class="player">${playerA}</div>
-      <div class="vs">vs</div>
-      <div class="player">${playerB}</div>
-    </div>
-  `;
-  return box;
-}

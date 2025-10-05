@@ -219,6 +219,7 @@ export function createProfileSettings(profile: Partial<UserProfile> = {}): HTMLE
     value: defaultProfile.bio || ''
   });
 
+
   // Advanced Settings Toggle - Styled Button
   const advancedToggle = document.createElement('div');
   advancedToggle.className = 'settings-button-container';
