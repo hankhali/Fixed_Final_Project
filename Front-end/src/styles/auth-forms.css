@@ -434,7 +434,7 @@
 
 .form-footer-link:hover span {
     background: linear-gradient(90deg, #00ffff, #00d0ff);
-    -webkit-background-clip: text;
+    /* -webkit-background-clip: text; */
     -webkit-text-fill-color: transparent;
     text-shadow: 0 0 20px rgba(0, 240, 255, 0.8);
 }
